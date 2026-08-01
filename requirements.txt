@@ -1,0 +1,7 @@
+# Day 29 recommendation engine toolkit
+#
+# The library code itself (similarity.py, candidate_gen.py, scorer.py,
+# evaluator.py) has zero runtime dependencies — stdlib `math` and
+# `typing` only. This file pins the dev/test tooling.
+
+pytest==8.3.3

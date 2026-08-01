@@ -13,6 +13,10 @@ actually engaged with (ground truth).
 """
 
 import math
+from typing import Any, Dict, Iterable, List, Optional
+
+ItemId = str
+UserId = str
 
 
 class RecommendationEvaluator:
@@ -21,11 +25,13 @@ class RecommendationEvaluator:
     """
 
     @staticmethod
-    def _top_k(recommendations, k):
+    def _top_k(recommendations: List[ItemId], k: int) -> List[ItemId]:
         return list(recommendations)[:k] if recommendations else []
 
     @staticmethod
-    def precision_at_k(recommendations, relevant_items, k):
+    def precision_at_k(
+        recommendations: List[ItemId], relevant_items: Optional[Iterable[ItemId]], k: int
+    ) -> float:
         """Fraction of the top-k recommended items that are relevant.
 
         Returns 0.0 if there are no recommendations or k <= 0.
@@ -40,7 +46,9 @@ class RecommendationEvaluator:
         return hits / len(top_k)
 
     @staticmethod
-    def recall_at_k(recommendations, relevant_items, k):
+    def recall_at_k(
+        recommendations: List[ItemId], relevant_items: Optional[Iterable[ItemId]], k: int
+    ) -> float:
         """Fraction of all relevant items that were captured in the top-k.
 
         Returns 0.0 if there is no ground truth to compare against
@@ -56,7 +64,9 @@ class RecommendationEvaluator:
         return hits / len(relevant_set)
 
     @staticmethod
-    def ndcg_at_k(recommendations, relevant_items, k):
+    def ndcg_at_k(
+        recommendations: List[ItemId], relevant_items: Optional[Iterable[ItemId]], k: int
+    ) -> float:
         """Normalized Discounted Cumulative Gain at k.
 
         Uses binary relevance (1 if in relevant_items, else 0).
@@ -84,7 +94,12 @@ class RecommendationEvaluator:
         return dcg / idcg
 
     @classmethod
-    def evaluate_all(cls, recommendations_dict, ground_truth_dict, k=10):
+    def evaluate_all(
+        cls,
+        recommendations_dict: Optional[Dict[UserId, List[ItemId]]],
+        ground_truth_dict: Optional[Dict[UserId, List[ItemId]]],
+        k: int = 10,
+    ) -> Dict[str, Any]:
         """Average precision/recall/ndcg at k across many users.
 
         recommendations_dict: {user_id: [item_id, ...]}

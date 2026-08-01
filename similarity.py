@@ -12,6 +12,10 @@ recommendation engine:
 """
 
 import math
+from typing import Sequence, Set, FrozenSet, Union
+
+Number = Union[int, float]
+NumericSet = Union[Set, FrozenSet]
 
 
 class SimilarityCalculator:
@@ -24,7 +28,7 @@ class SimilarityCalculator:
     """
 
     @staticmethod
-    def cosine_similarity(vec1, vec2):
+    def cosine_similarity(vec1: Sequence[Number], vec2: Sequence[Number]) -> float:
         """Cosine similarity between two equal-length numeric vectors.
 
         Returns a value in [-1, 1] (in practice [0, 1] for non-negative
@@ -47,7 +51,7 @@ class SimilarityCalculator:
         return dot / (mag1 * mag2)
 
     @staticmethod
-    def jaccard_similarity(set1, set2):
+    def jaccard_similarity(set1: NumericSet, set2: NumericSet) -> float:
         """Jaccard similarity between two sets: |intersection| / |union|.
 
         Useful for comparing skill sets, tag lists, or category lists.
@@ -66,7 +70,7 @@ class SimilarityCalculator:
         return len(intersection) / len(union)
 
     @staticmethod
-    def pearson_correlation(ratings1, ratings2):
+    def pearson_correlation(ratings1: Sequence[Number], ratings2: Sequence[Number]) -> float:
         """Pearson correlation coefficient between two rating series.
 
         Measures whether two users rate items in a similarly-trending

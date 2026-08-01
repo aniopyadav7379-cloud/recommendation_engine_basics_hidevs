@@ -16,17 +16,25 @@ scorer can't blow up the combined score.
 """
 
 
+from typing import Any, Callable, Dict, List, Optional
+
+UserId = str
+ItemId = str
+Context = Dict[str, Any]
+ScorerFn = Callable[[UserId, ItemId, Context], float]
+
+
 class RecommendationScorer:
     """Registers weighted scoring functions and combines them into a
     single relevance score per item, with a short human-readable
     explanation of what drove the score.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # name -> {"fn": callable, "weight": float}
-        self._scorers = {}
+        self._scorers: Dict[str, Dict[str, Any]] = {}
 
-    def add_scorer(self, name, function, weight=1.0):
+    def add_scorer(self, name: str, function: ScorerFn, weight: float = 1.0) -> None:
         """Register a scoring function under `name` with a relative weight.
 
         Weights don't need to sum to 1 — calculate_score normalizes
@@ -39,10 +47,12 @@ class RecommendationScorer:
         self._scorers[name] = {"fn": function, "weight": weight}
 
     @staticmethod
-    def _clamp(value):
+    def _clamp(value: float) -> float:
         return max(0.0, min(1.0, value))
 
-    def calculate_score(self, user_id, item_id, context=None):
+    def calculate_score(
+        self, user_id: UserId, item_id: ItemId, context: Optional[Context] = None
+    ) -> Dict[str, Any]:
         """Score a single item for a user as a weighted average of all
         registered scorers. Returns a dict:
 
@@ -86,7 +96,7 @@ class RecommendationScorer:
         }
 
     @staticmethod
-    def _build_explanation(breakdown):
+    def _build_explanation(breakdown: Dict[str, float]) -> str:
         if not breakdown:
             return "No scoring factors available"
         # Explain using the single strongest contributing factor.
@@ -94,7 +104,13 @@ class RecommendationScorer:
         name, value = top_factor
         return f"Recommended primarily due to '{name}' score of {round(value, 2)}"
 
-    def rank_candidates(self, user_id, candidates, context=None, limit=10):
+    def rank_candidates(
+        self,
+        user_id: UserId,
+        candidates: List[ItemId],
+        context: Optional[Context] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
         """Score every candidate item and return the top `limit`,
         highest-scored first.
 

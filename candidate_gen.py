@@ -15,7 +15,15 @@ Expected data shape (all dictionaries, injected via the constructor):
                          co-occurrence heuristic if not provided.
 """
 
+from typing import Dict, List, Optional, Set, Tuple
+
 from similarity import SimilarityCalculator
+
+UserId = str
+ItemId = str
+UserHistory = Dict[UserId, List[ItemId]]
+ItemTags = Dict[ItemId, Set[str]]
+ItemPopularity = Dict[ItemId, int]
 
 
 class CandidateGenerator:
@@ -26,21 +34,26 @@ class CandidateGenerator:
     DEFAULT_LIMIT = 20
     MAX_LIMIT = 50
 
-    def __init__(self, user_item_history=None, item_tags=None, item_popularity=None):
-        self.user_item_history = user_item_history or {}
-        self.item_tags = item_tags or {}
-        self.item_popularity = item_popularity or {}
+    def __init__(
+        self,
+        user_item_history: Optional[UserHistory] = None,
+        item_tags: Optional[ItemTags] = None,
+        item_popularity: Optional[ItemPopularity] = None,
+    ) -> None:
+        self.user_item_history: UserHistory = user_item_history or {}
+        self.item_tags: ItemTags = item_tags or {}
+        self.item_popularity: ItemPopularity = item_popularity or {}
         self.similarity = SimilarityCalculator()
 
     # -- helpers ------------------------------------------------------
 
-    def _all_items(self):
+    def _all_items(self) -> Set[ItemId]:
         items = set(self.item_popularity.keys())
         for hist in self.user_item_history.values():
             items.update(hist)
         return items
 
-    def _similar_users(self, user_id):
+    def _similar_users(self, user_id: UserId) -> List[Tuple[UserId, float]]:
         """Rank other users by Jaccard similarity of their item history.
 
         Simple, dependency-free stand-in for a real collaborative
@@ -57,13 +70,13 @@ class CandidateGenerator:
         scored.sort(key=lambda pair: pair[1], reverse=True)
         return scored
 
-    def _limit(self, items, limit):
+    def _limit(self, items: List[ItemId], limit: int) -> List[ItemId]:
         limit = max(1, min(limit, self.MAX_LIMIT))
         return items[:limit]
 
     # -- strategies -----------------------------------------------------
 
-    def collaborative_candidates(self, user_id, limit=DEFAULT_LIMIT):
+    def collaborative_candidates(self, user_id: UserId, limit: int = DEFAULT_LIMIT) -> List[ItemId]:
         """Items liked by users similar to `user_id` (that this user
         hasn't already interacted with). Falls back to popularity for
         cold-start users with no history or no similar peers.
@@ -87,7 +100,7 @@ class CandidateGenerator:
 
         return self._limit(candidates, limit)
 
-    def content_based_candidates(self, user_id, limit=DEFAULT_LIMIT):
+    def content_based_candidates(self, user_id: UserId, limit: int = DEFAULT_LIMIT) -> List[ItemId]:
         """Items whose tags overlap with tags of items the user has
         already liked. Falls back to popularity for cold-start users.
         """
@@ -120,7 +133,7 @@ class CandidateGenerator:
 
         return self._limit(candidates, limit)
 
-    def popularity_candidates(self, limit=DEFAULT_LIMIT):
+    def popularity_candidates(self, limit: int = DEFAULT_LIMIT) -> List[ItemId]:
         """Most popular items overall, regardless of user. Always
         available — this is the ultimate cold-start fallback.
         """
@@ -128,7 +141,7 @@ class CandidateGenerator:
         candidates = [item for item, _count in ranked]
         return self._limit(candidates, limit)
 
-    def hybrid_candidates(self, user_id, limit=DEFAULT_LIMIT):
+    def hybrid_candidates(self, user_id: UserId, limit: int = DEFAULT_LIMIT) -> List[ItemId]:
         """Combine collaborative, content-based, and popularity candidates,
         interleaved so no single strategy dominates the pool, then
         de-duplicated while preserving order of first appearance.
@@ -148,7 +161,7 @@ class CandidateGenerator:
         return self._limit(combined, limit)
 
 
-def zip_longest_manual(*lists):
+def zip_longest_manual(*lists: List[Optional[ItemId]]):
     """Small local zip_longest so we don't need itertools for one call site."""
     max_len = max((len(lst) for lst in lists), default=0)
     for i in range(max_len):
