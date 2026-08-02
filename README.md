@@ -1,143 +1,128 @@
-# Day 29: Recommendation Engine Components
+# Mini Recommendation Engine
 
-A foundational, in-memory toolkit for building a recommendation engine.
-Four independent modules cover similarity, candidate generation,
-scoring/ranking, and evaluation — the algorithmic core that tomorrow's
-full system will be built on top of.
+A simple, working recommendation engine with four components — the
+same building blocks behind how platforms like Netflix and Amazon
+suggest items. Runs entirely on plain Python dictionaries and sets,
+no database or external libraries required.
 
-No database, no external services, no runtime dependencies. Everything
-runs on plain Python dictionaries.
+## How it works, end to end
 
-## Components
+```
+user preferences  --->  Candidate Generator  --->  Scorer  --->  top picks
+                          (narrows catalog          (ranks them)
+                           down to relevant                          |
+                           items)                                    v
+                                                              Evaluator
+                                                      (checks precision against
+                                                       what the user actually liked)
+```
 
-| Module | Class | Purpose |
-|---|---|---|
-| `similarity.py` | `SimilarityCalculator` | Cosine similarity, Jaccard similarity, Pearson correlation |
-| `candidate_gen.py` | `CandidateGenerator` | Collaborative, content-based, popularity, and hybrid candidate pools |
-| `scorer.py` | `RecommendationScorer` | Weighted, pluggable scoring and ranking of candidates |
-| `evaluator.py` | `RecommendationEvaluator` | precision@k, recall@k, NDCG@k, and aggregate evaluation |
+## The four components
 
-### `SimilarityCalculator`
+### 1. `similarity.py` — Similarity Calculator
+
+Measures how similar two things are:
+
+- **`cosine_similarity(vec1, vec2)`** — compares two numeric vectors
+  (e.g. rating patterns). Returns a value roughly in `[0, 1]`.
+- **`jaccard_similarity(set1, set2)`** — compares two sets (e.g. movie
+  genres, tags). Returns `intersection / union`, a value in `[0, 1]`.
 
 ```python
 from similarity import SimilarityCalculator
 
-sc = SimilarityCalculator()
-sc.cosine_similarity([1, 2, 3], [1, 2, 4])      # user/item vectors -> float in [-1, 1]
-sc.jaccard_similarity({"python", "sql"}, {"python"})  # tag/skill sets -> float in [0, 1]
-sc.pearson_correlation([5, 3, 4], [4, 2, 5])    # rating patterns -> float in [-1, 1]
+sim = SimilarityCalculator()
+sim.cosine_similarity([1, 2, 3], [1, 2, 4])
+sim.jaccard_similarity({"sci-fi", "action"}, {"sci-fi", "drama"})
 ```
 
-Edge cases return a sensible default instead of raising: empty or
-zero-magnitude vectors, empty sets, constant rating series all
-resolve to `0.0` (or `1.0` for two empty sets under Jaccard, since
-they're vacuously identical). Mismatched vector/series lengths raise
-`ValueError`.
+Handles empty vectors/sets and zero vectors without crashing.
 
-### `CandidateGenerator`
+### 2. `candidate_gen.py` — Candidate Generator
+
+Takes a catalog of items (each described by a set of tags) and a
+user's preferences (a set of tags they like), and returns the items
+worth considering — ranked by how well their tags overlap with the
+user's preferences (using Jaccard similarity under the hood).
 
 ```python
 from candidate_gen import CandidateGenerator
 
-gen = CandidateGenerator(
-    user_item_history={"alice": ["book1", "book2"], "bob": ["book1", "book2", "book3"]},
-    item_tags={"book1": {"scifi"}, "book2": {"scifi", "adventure"}, "book3": {"scifi", "mystery"}},
-    item_popularity={"book1": 100, "book2": 80, "book3": 40},
-)
-
-gen.collaborative_candidates("alice")   # items liked by similar users
-gen.content_based_candidates("alice")   # items with overlapping tags
-gen.popularity_candidates()             # most popular overall
-gen.hybrid_candidates("alice")          # interleaved combination, de-duplicated
+catalog = {"movie1": {"action", "sci-fi"}, "movie2": {"romance"}}
+gen = CandidateGenerator(catalog)
+gen.find_candidates({"action", "sci-fi"}, limit=10)
+# -> ["movie1"]
 ```
 
-Every strategy falls back to `popularity_candidates()` for cold-start
-users (no history, or no similar peers found). Results are capped at
-`CandidateGenerator.MAX_LIMIT` (50) regardless of the requested limit.
+Returns `[]` for an empty catalog, empty preferences, or no matches —
+never crashes on missing data.
 
-### `RecommendationScorer`
+### 3. `scorer.py` — Scorer
+
+Takes the candidates and ranks them, combining two signals:
+
+- **relevance** (70% weight) — tag overlap with user preferences
+- **rating** (30% weight) — the item's average rating, if known
+
+Returns the top N picks as `(item_id, score)` pairs, best first.
 
 ```python
-from scorer import RecommendationScorer
+from scorer import Scorer
 
-scorer = RecommendationScorer()
-scorer.add_scorer("popularity", lambda user_id, item_id, ctx: ctx["pop"].get(item_id, 0) / 100, weight=1.0)
-scorer.add_scorer("relevance", my_relevance_fn, weight=2.0)
-
-scorer.calculate_score("alice", "book1", context={"pop": {...}})
-scorer.rank_candidates("alice", candidates, context={"pop": {...}}, limit=10)
+scorer = Scorer(catalog, item_ratings={"movie1": 4.5})
+scorer.rank_candidates(["movie1", "movie2"], {"action", "sci-fi"}, top_n=3)
+# -> [("movie1", 0.79), ...]
 ```
 
-A scoring function is any callable `(user_id, item_id, context) -> float`.
-Scores are combined as a weighted average, clamped to `[0, 1]`. If a
-scorer raises an exception it's skipped rather than failing the whole
-ranking. Each result includes a `breakdown` per factor and a one-line
-`explanation` naming the strongest contributor.
+An empty candidate list returns `[]`; an item missing from the catalog
+or ratings just scores low instead of raising an error.
 
-### `RecommendationEvaluator`
+### 4. `evaluator.py` — Evaluator
+
+Checks how good a set of recommendations actually was, using
+precision: of the items recommended, what fraction did the user
+actually want?
 
 ```python
-from evaluator import RecommendationEvaluator
+from evaluator import Evaluator
 
-RecommendationEvaluator.precision_at_k(recommendations, relevant_items, k=10)
-RecommendationEvaluator.recall_at_k(recommendations, relevant_items, k=10)
-RecommendationEvaluator.ndcg_at_k(recommendations, relevant_items, k=10)
-RecommendationEvaluator.evaluate_all(recommendations_dict, ground_truth_dict, k=10)
+ev = Evaluator()
+ev.precision(recommended_items=["movie1", "movie2"], relevant_items=["movie1"])
+# -> 0.5
+ev.precision_at_k(recommended_items, relevant_items, k=3)
 ```
 
-`evaluate_all` averages all three metrics across users, skipping any
-user missing from `ground_truth_dict` rather than counting them as a
-zero score.
+Returns `0.0` (rather than crashing) when there are no recommendations
+or no known relevant items to compare against.
 
-## Installation
+## Running it
 
 ```bash
-pip install -r requirements.txt
+python3 demo.py   # see all four components work together on sample movie data
+python3 test.py   # run all tests
 ```
 
-The library modules themselves (`similarity.py`, `candidate_gen.py`,
-`scorer.py`, `evaluator.py`) have zero runtime dependencies — only the
-standard library. `requirements.txt` pins `pytest` for the test suite.
-
-## Running the tests
-
-```bash
-python3 -m pytest
-```
-
-54 test cases across five files in `tests/`: one per module, plus
-`test_integration.py`, which chains all four components together the
-way the full system will tomorrow — generate candidates, score and
-rank them, then evaluate the ranking against a ground-truth set.
-`pytest.ini` puts the project root on `sys.path` so tests can import
-the top-level modules directly, no packaging step required.
+Each module can also be run on its own (`python3 similarity.py`, etc.)
+to see its individual test cases.
 
 ## Project structure
 
 ```
-day29_project/
-├── similarity.py       # Component 1: similarity metrics
-├── candidate_gen.py    # Component 2: candidate generation strategies
-├── scorer.py            # Component 3: weighted scoring and ranking
-├── evaluator.py          # Component 4: evaluation metrics
-├── requirements.txt
-├── pytest.ini
-└── tests/
-    ├── test_similarity.py
-    ├── test_candidate_gen.py
-    ├── test_scorer.py
-    ├── test_evaluator.py
-    └── test_integration.py
+recommendation_engine/
+├── similarity.py     # Component 1: cosine + Jaccard similarity
+├── candidate_gen.py  # Component 2: finds items matching preferences
+├── scorer.py         # Component 3: ranks candidates, returns top picks
+├── evaluator.py       # Component 4: precision-based evaluation
+├── demo.py            # wires all four together on sample data
+└── test.py            # tests for every component + the full pipeline
 ```
 
-## Status / what's intentionally out of scope
+## What this doesn't do (on purpose)
 
-This is the algorithmic core only — built to sit under a real system,
-not to be one. Not included yet, by design:
-
-- No database or persistence layer (dictionaries stand in for storage)
-- No API layer or web framework
-- No containerization (Dockerfile) or CI configuration
-- No packaging (`pyproject.toml`) — not installable as a library yet
-
-Those come once there's a concrete system to wire this into.
+This is a learning-focused mini system, not a production one: no
+database, no API, no real user data — just enough to see how
+similarity, candidate generation, scoring, and evaluation fit
+together. From here, the natural next steps are collaborative
+filtering with real user-item interaction data, more evaluation
+metrics (recall, NDCG), and persisting the catalog somewhere other
+than a Python dictionary.

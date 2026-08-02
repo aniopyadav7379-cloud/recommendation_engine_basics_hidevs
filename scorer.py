@@ -1,187 +1,104 @@
 """
-scorer.py — Component 3: Scorer & Ranker
+scorer.py — Scorer
 
-Combines one or more weighted scoring functions into a single score
-per (user, item) pair, then ranks candidates by that score.
+Takes a shortlist of candidate items (from the Candidate Generator)
+and ranks them, combining two signals:
 
-A "scorer" is any callable with the signature:
+- relevance: how well the item's tags match the user's preferences
+  (using Jaccard similarity)
+- rating: the item's average rating, if available (so a highly-rated
+  item edges out an equally-relevant but poorly-rated one)
 
-    scorer_fn(user_id, item_id, context) -> float in [0, 1]
-
-`context` is a plain dict the caller supplies with whatever the
-scoring functions need (e.g. {"item_popularity": {...}, "item_tags": {...}}).
-Each scorer function is expected to clamp/normalize its own output;
-RecommendationScorer additionally clamps defensively so one bad
-scorer can't blow up the combined score.
+Returns the top N picks, best first.
 """
 
-
-from typing import Any, Callable, Dict, List, Optional
-
-UserId = str
-ItemId = str
-Context = Dict[str, Any]
-ScorerFn = Callable[[UserId, ItemId, Context], float]
+from similarity import SimilarityCalculator
 
 
-class RecommendationScorer:
-    """Registers weighted scoring functions and combines them into a
-    single relevance score per item, with a short human-readable
-    explanation of what drove the score.
-    """
+class Scorer:
+    """Scores and ranks candidate items for a user."""
 
-    def __init__(self) -> None:
-        # name -> {"fn": callable, "weight": float}
-        self._scorers: Dict[str, Dict[str, Any]] = {}
+    # how much weight relevance gets vs. rating when combining scores
+    RELEVANCE_WEIGHT = 0.7
+    RATING_WEIGHT = 0.3
+    MAX_RATING = 5.0  # assumes a 5-star rating scale
 
-    def add_scorer(self, name: str, function: ScorerFn, weight: float = 1.0) -> None:
-        """Register a scoring function under `name` with a relative weight.
-
-        Weights don't need to sum to 1 — calculate_score normalizes
-        by the total weight of scorers that actually ran.
+    def __init__(self, item_catalog, item_ratings=None):
         """
-        if not callable(function):
-            raise TypeError("add_scorer: function must be callable")
-        if weight < 0:
-            raise ValueError("add_scorer: weight must be non-negative")
-        self._scorers[name] = {"fn": function, "weight": weight}
-
-    @staticmethod
-    def _clamp(value: float) -> float:
-        return max(0.0, min(1.0, value))
-
-    def calculate_score(
-        self, user_id: UserId, item_id: ItemId, context: Optional[Context] = None
-    ) -> Dict[str, Any]:
-        """Score a single item for a user as a weighted average of all
-        registered scorers. Returns a dict:
-
-            {
-                "score": float in [0, 1],
-                "breakdown": {name: raw_score, ...},
-                "explanation": "human readable summary"
-            }
-
-        A scorer that raises an exception is skipped (not fatal) so
-        one broken factor doesn't take down the whole ranking; it's
-        omitted from the breakdown and excluded from the weight total.
+        item_catalog: dict of {item_id: set_of_tags}
+        item_ratings: optional dict of {item_id: average_rating (0-5)}
         """
-        context = context or {}
+        self.item_catalog = item_catalog or {}
+        self.item_ratings = item_ratings or {}
+        self.similarity = SimilarityCalculator()
 
-        if not self._scorers:
-            return {"score": 0.0, "breakdown": {}, "explanation": "no scorers registered"}
+    def score_item(self, item_id, user_preferences):
+        """
+        Score a single item for a user. Returns a float in [0, 1].
 
-        breakdown = {}
-        weighted_sum = 0.0
-        total_weight = 0.0
+        Edge cases handled:
+        - item not in catalog -> treated as having no tags, so
+          relevance is 0.0
+        - item has no rating on file -> treated as rating 0.0 (doesn't
+          crash, just doesn't get a rating boost)
+        """
+        tags = self.item_catalog.get(item_id, set())
+        relevance = self.similarity.jaccard_similarity(user_preferences, tags)
 
-        for name, spec in self._scorers.items():
-            try:
-                raw = spec["fn"](user_id, item_id, context)
-                raw = self._clamp(float(raw))
-            except Exception:
-                continue
-            breakdown[name] = raw
-            weighted_sum += raw * spec["weight"]
-            total_weight += spec["weight"]
+        raw_rating = self.item_ratings.get(item_id, 0.0)
+        normalized_rating = raw_rating / self.MAX_RATING if self.MAX_RATING else 0.0
 
-        final_score = weighted_sum / total_weight if total_weight > 0 else 0.0
+        combined = (self.RELEVANCE_WEIGHT * relevance) + (self.RATING_WEIGHT * normalized_rating)
+        return round(combined, 4)
 
-        explanation = self._build_explanation(breakdown)
+    def rank_candidates(self, candidates, user_preferences, top_n=5):
+        """
+        Score every candidate and return the top_n highest-scored,
+        as a list of (item_id, score) tuples, best first.
 
-        return {
-            "score": round(final_score, 4),
-            "breakdown": {k: round(v, 4) for k, v in breakdown.items()},
-            "explanation": explanation,
-        }
-
-    @staticmethod
-    def _build_explanation(breakdown: Dict[str, float]) -> str:
-        if not breakdown:
-            return "No scoring factors available"
-        # Explain using the single strongest contributing factor.
-        top_factor = max(breakdown.items(), key=lambda pair: pair[1])
-        name, value = top_factor
-        return f"Recommended primarily due to '{name}' score of {round(value, 2)}"
-
-    def rank_candidates(
-        self,
-        user_id: UserId,
-        candidates: List[ItemId],
-        context: Optional[Context] = None,
-        limit: int = 10,
-    ) -> List[Dict[str, Any]]:
-        """Score every candidate item and return the top `limit`,
-        highest-scored first.
-
-        Each entry: {"item_id": ..., "score": ..., "breakdown": ..., "explanation": ...}
+        Edge cases handled:
+        - empty candidate list -> returns []
         """
         if not candidates:
             return []
 
-        results = []
-        for item_id in candidates:
-            scored = self.calculate_score(user_id, item_id, context)
-            results.append({"item_id": item_id, **scored})
+        scored = [
+            (item_id, self.score_item(item_id, user_preferences))
+            for item_id in candidates
+        ]
+        scored.sort(key=lambda pair: pair[1], reverse=True)
 
-        results.sort(key=lambda entry: entry["score"], reverse=True)
-        limit = max(1, limit)
-        return results[:limit]
+        top_n = max(1, top_n)
+        return scored[:top_n]
 
 
 # ---------------------------------------------------------------------------
-# Simple standalone test cases
+# Simple test cases you can run directly: python3 scorer.py
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    scorer = RecommendationScorer()
-
-    # Relevance: how well item tags match a fixed "user interest" set in context
-    def relevance_scorer(user_id, item_id, context):
-        user_tags = context.get("user_tags", set())
-        item_tags = context.get("item_tags", {}).get(item_id, set())
-        if not user_tags or not item_tags:
-            return 0.0
-        overlap = user_tags & item_tags
-        return len(overlap) / len(user_tags | item_tags)
-
-    # Popularity: normalized by the max popularity present in context
-    def popularity_scorer(user_id, item_id, context):
-        pop = context.get("item_popularity", {})
-        if not pop:
-            return 0.0
-        max_pop = max(pop.values()) or 1
-        return pop.get(item_id, 0) / max_pop
-
-    # Recency: 1.0 for items flagged "new", else 0.3
-    def recency_scorer(user_id, item_id, context):
-        new_items = context.get("new_items", set())
-        return 1.0 if item_id in new_items else 0.3
-
-    scorer.add_scorer("relevance", relevance_scorer, weight=2.0)
-    scorer.add_scorer("popularity", popularity_scorer, weight=1.0)
-    scorer.add_scorer("recency", recency_scorer, weight=0.5)
-
-    context = {
-        "user_tags": {"python", "backend"},
-        "item_tags": {
-            "i1": {"python", "backend"},
-            "i2": {"design"},
-            "i3": {"python", "ml"},
-        },
-        "item_popularity": {"i1": 50, "i2": 10, "i3": 30},
-        "new_items": {"i3"},
+    catalog = {
+        "movie1": {"action", "sci-fi"},
+        "movie2": {"sci-fi"},
+        "movie3": {"comedy"},
     }
+    ratings = {"movie1": 4.5, "movie2": 3.0, "movie3": 4.8}
 
-    single = scorer.calculate_score("u1", "i1", context)
-    assert 0.0 <= single["score"] <= 1.0
-    assert "relevance" in single["breakdown"]
+    scorer = Scorer(catalog, ratings)
+    preferences = {"action", "sci-fi"}
 
-    ranked = scorer.rank_candidates("u1", ["i1", "i2", "i3"], context, limit=2)
+    # movie1 matches both preference tags AND has a high rating,
+    # so it should outrank movie2 (matches one tag, lower rating)
+    ranked = scorer.rank_candidates(["movie1", "movie2", "movie3"], preferences, top_n=2)
+    print("Ranked recommendations:", ranked)
+
+    assert ranked[0][0] == "movie1"
     assert len(ranked) == 2
-    assert ranked[0]["item_id"] == "i1"  # best tag + popularity match
 
-    empty_scorer = RecommendationScorer()
-    assert empty_scorer.calculate_score("u1", "i1")["score"] == 0.0
-    assert empty_scorer.rank_candidates("u1", []) == []
+    # empty candidates -> empty result
+    assert scorer.rank_candidates([], preferences) == []
 
-    print("scorer.py: all inline tests passed")
+    # item not in catalog doesn't crash, just scores low
+    score = scorer.score_item("unknown_movie", preferences)
+    assert score == 0.0
+
+    print("\nAll scorer.py tests passed!")

@@ -1,207 +1,96 @@
 """
-candidate_gen.py — Component 2: Candidate Generator
+candidate_gen.py — Candidate Generator
 
-Generates pools of candidate item IDs using several strategies.
-Today this runs on plain in-memory dictionaries (no DB yet) — the
-same interface will sit on top of real storage tomorrow.
+Given a catalog of items (each described by a set of tags, e.g.
+genres or categories) and a user's preferences (a set of tags they
+like), finds candidate items worth recommending.
 
-Expected data shape (all dictionaries, injected via the constructor):
-
-    user_item_history: {user_id: [item_id, ...]}       # items a user liked/interacted with
-    item_tags:         {item_id: {tag, ...}}            # tags/categories per item
-    item_popularity:   {item_id: int}                   # e.g. total likes/purchases
-    user_similarity_fn: optional callable(user_id) -> [(other_user_id, score), ...]
-                         sorted by score descending. Defaults to a simple
-                         co-occurrence heuristic if not provided.
+This is the "narrow down the whole catalog to a shortlist" step —
+the Scorer decides which of these candidates are actually the best
+picks.
 """
-
-from typing import Dict, List, Optional, Set, Tuple
 
 from similarity import SimilarityCalculator
 
-UserId = str
-ItemId = str
-UserHistory = Dict[UserId, List[ItemId]]
-ItemTags = Dict[ItemId, Set[str]]
-ItemPopularity = Dict[ItemId, int]
-
 
 class CandidateGenerator:
-    """Produces candidate item pools for a given user using several
-    independent strategies, plus a hybrid combiner.
+    """Finds candidate items based on how well their tags match a
+    user's stated preferences.
     """
 
-    DEFAULT_LIMIT = 20
-    MAX_LIMIT = 50
-
-    def __init__(
-        self,
-        user_item_history: Optional[UserHistory] = None,
-        item_tags: Optional[ItemTags] = None,
-        item_popularity: Optional[ItemPopularity] = None,
-    ) -> None:
-        self.user_item_history: UserHistory = user_item_history or {}
-        self.item_tags: ItemTags = item_tags or {}
-        self.item_popularity: ItemPopularity = item_popularity or {}
+    def __init__(self, item_catalog):
+        """
+        item_catalog: dict of {item_id: set_of_tags}
+            e.g. {"movie1": {"action", "sci-fi"}, "movie2": {"romance"}}
+        """
+        self.item_catalog = item_catalog or {}
         self.similarity = SimilarityCalculator()
 
-    # -- helpers ------------------------------------------------------
-
-    def _all_items(self) -> Set[ItemId]:
-        items = set(self.item_popularity.keys())
-        for hist in self.user_item_history.values():
-            items.update(hist)
-        return items
-
-    def _similar_users(self, user_id: UserId) -> List[Tuple[UserId, float]]:
-        """Rank other users by Jaccard similarity of their item history.
-
-        Simple, dependency-free stand-in for a real collaborative
-        filtering model — good enough to generate candidates today.
+    def find_candidates(self, user_preferences, limit=10):
         """
-        target_items = set(self.user_item_history.get(user_id, []))
-        scored = []
-        for other_id, other_items in self.user_item_history.items():
-            if other_id == user_id:
-                continue
-            score = self.similarity.jaccard_similarity(target_items, set(other_items))
+        Return a list of item IDs whose tags overlap with the user's
+        preferences, ranked by how much they overlap (best match first).
+
+        user_preferences: a set (or list) of tags the user likes,
+            e.g. {"action", "sci-fi"}
+        limit: maximum number of candidates to return
+
+        Edge cases handled:
+        - empty catalog -> returns []
+        - empty/no preferences -> returns [] (nothing to match against,
+          so we can't meaningfully guess what they'd like)
+        - no items overlap at all -> returns []
+        """
+        if not self.item_catalog or not user_preferences:
+            return []
+
+        preferences = set(user_preferences)
+        scored_items = []
+
+        for item_id, tags in self.item_catalog.items():
+            score = self.similarity.jaccard_similarity(preferences, tags)
             if score > 0:
-                scored.append((other_id, score))
-        scored.sort(key=lambda pair: pair[1], reverse=True)
-        return scored
+                scored_items.append((item_id, score))
 
-    def _limit(self, items: List[ItemId], limit: int) -> List[ItemId]:
-        limit = max(1, min(limit, self.MAX_LIMIT))
-        return items[:limit]
+        # best matches first
+        scored_items.sort(key=lambda pair: pair[1], reverse=True)
 
-    # -- strategies -----------------------------------------------------
-
-    def collaborative_candidates(self, user_id: UserId, limit: int = DEFAULT_LIMIT) -> List[ItemId]:
-        """Items liked by users similar to `user_id` (that this user
-        hasn't already interacted with). Falls back to popularity for
-        cold-start users with no history or no similar peers.
-        """
-        seen = set(self.user_item_history.get(user_id, []))
-        similar_users = self._similar_users(user_id)
-
-        if not similar_users:
-            return self.popularity_candidates(limit)
-
-        candidates = []
-        seen_candidates = set()
-        for other_id, _score in similar_users:
-            for item in self.user_item_history.get(other_id, []):
-                if item not in seen and item not in seen_candidates:
-                    candidates.append(item)
-                    seen_candidates.add(item)
-
-        if not candidates:
-            return self.popularity_candidates(limit)
-
-        return self._limit(candidates, limit)
-
-    def content_based_candidates(self, user_id: UserId, limit: int = DEFAULT_LIMIT) -> List[ItemId]:
-        """Items whose tags overlap with tags of items the user has
-        already liked. Falls back to popularity for cold-start users.
-        """
-        history = self.user_item_history.get(user_id, [])
-        if not history:
-            return self.popularity_candidates(limit)
-
-        user_tags = set()
-        for item in history:
-            user_tags.update(self.item_tags.get(item, set()))
-
-        if not user_tags:
-            return self.popularity_candidates(limit)
-
-        seen = set(history)
-        scored = []
-        for item in self._all_items():
-            if item in seen:
-                continue
-            tags = self.item_tags.get(item, set())
-            score = self.similarity.jaccard_similarity(user_tags, tags)
-            if score > 0:
-                scored.append((item, score))
-
-        scored.sort(key=lambda pair: pair[1], reverse=True)
-        candidates = [item for item, _score in scored]
-
-        if not candidates:
-            return self.popularity_candidates(limit)
-
-        return self._limit(candidates, limit)
-
-    def popularity_candidates(self, limit: int = DEFAULT_LIMIT) -> List[ItemId]:
-        """Most popular items overall, regardless of user. Always
-        available — this is the ultimate cold-start fallback.
-        """
-        ranked = sorted(self.item_popularity.items(), key=lambda pair: pair[1], reverse=True)
-        candidates = [item for item, _count in ranked]
-        return self._limit(candidates, limit)
-
-    def hybrid_candidates(self, user_id: UserId, limit: int = DEFAULT_LIMIT) -> List[ItemId]:
-        """Combine collaborative, content-based, and popularity candidates,
-        interleaved so no single strategy dominates the pool, then
-        de-duplicated while preserving order of first appearance.
-        """
-        collab = self.collaborative_candidates(user_id, limit)
-        content = self.content_based_candidates(user_id, limit)
-        popular = self.popularity_candidates(limit)
-
-        combined = []
-        seen = set()
-        for triple in zip_longest_manual(collab, content, popular):
-            for item in triple:
-                if item is not None and item not in seen:
-                    combined.append(item)
-                    seen.add(item)
-
-        return self._limit(combined, limit)
-
-
-def zip_longest_manual(*lists: List[Optional[ItemId]]):
-    """Small local zip_longest so we don't need itertools for one call site."""
-    max_len = max((len(lst) for lst in lists), default=0)
-    for i in range(max_len):
-        yield tuple(lst[i] if i < len(lst) else None for lst in lists)
+        limit = max(1, limit)
+        return [item_id for item_id, _score in scored_items[:limit]]
 
 
 # ---------------------------------------------------------------------------
-# Simple standalone test cases
+# Simple test cases you can run directly: python3 candidate_gen.py
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    history = {
-        "u1": ["i1", "i2", "i3"],
-        "u2": ["i1", "i2", "i4"],
-        "u3": ["i5", "i6"],
+    catalog = {
+        "movie1": {"action", "sci-fi"},
+        "movie2": {"romance", "comedy"},
+        "movie3": {"sci-fi", "thriller"},
+        "movie4": {"comedy"},
     }
-    tags = {
-        "i1": {"python", "backend"},
-        "i2": {"python", "ml"},
-        "i3": {"frontend"},
-        "i4": {"python", "backend"},
-        "i5": {"design"},
-        "i6": {"design", "frontend"},
-    }
-    popularity = {"i1": 50, "i2": 40, "i3": 10, "i4": 30, "i5": 5, "i6": 5}
 
-    gen = CandidateGenerator(history, tags, popularity)
+    gen = CandidateGenerator(catalog)
 
-    collab = gen.collaborative_candidates("u1")
-    assert "i4" in collab  # u2 is similar to u1 and liked i4
+    # user who likes sci-fi and action should get movie1 and movie3
+    candidates = gen.find_candidates({"action", "sci-fi"})
+    print("Candidates for sci-fi/action fan:", candidates)
+    assert "movie1" in candidates
+    assert "movie3" in candidates
+    assert "movie2" not in candidates
 
-    content = gen.content_based_candidates("u1")
-    assert "i4" in content  # shares python/backend tags with i1
+    # empty preferences -> no candidates
+    assert gen.find_candidates(set()) == []
 
-    popular = gen.popularity_candidates(3)
-    assert popular == ["i1", "i2", "i4"]
+    # empty catalog -> no candidates
+    empty_gen = CandidateGenerator({})
+    assert empty_gen.find_candidates({"action"}) == []
 
-    cold_start = gen.collaborative_candidates("new_user")
-    assert cold_start == gen.popularity_candidates()
+    # preferences with no matching items at all
+    assert gen.find_candidates({"horror"}) == []
 
-    hybrid = gen.hybrid_candidates("u1")
-    assert len(hybrid) > 0
+    # limit is respected
+    limited = gen.find_candidates({"action", "sci-fi", "romance", "comedy", "thriller"}, limit=2)
+    assert len(limited) == 2
 
-    print("candidate_gen.py: all inline tests passed")
+    print("\nAll candidate_gen.py tests passed!")
