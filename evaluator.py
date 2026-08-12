@@ -1,87 +1,72 @@
-"""
-evaluator.py — Evaluator
+"""Component 4: Evaluator.
 
-Checks how good a set of recommendations actually is, using
-precision: of the items we recommended, what fraction did the user
-actually want (based on some known "ground truth" of relevant items)?
-
-This is how you'd know, after the fact, whether the Scorer's rankings
-were any good — not just that the code ran, but that it recommended
-the right things.
+Offline metrics for measuring recommendation quality against ground
+truth (items the user actually engaged with).
 """
 
+import math
 
-class Evaluator:
-    """Basic evaluation metrics for a list of recommendations."""
 
-    @staticmethod
-    def precision(recommended_items, relevant_items):
-        """
-        Precision = (number of recommended items that are relevant)
-                    / (total number of recommended items)
-
-        recommended_items: list of item IDs the system recommended
-        relevant_items: list/set of item IDs the user actually liked
-                         (the "ground truth")
-
-        Returns a float in [0, 1].
-
-        Edge cases handled:
-        - no recommendations made -> 0.0 (can't have precision with
-          nothing recommended)
-        - no relevant items known -> 0.0 (nothing to be "correct" about)
-        """
-        if not recommended_items:
-            return 0.0
-        if not relevant_items:
-            return 0.0
-
-        relevant_set = set(relevant_items)
-        hits = sum(1 for item in recommended_items if item in relevant_set)
-
-        return hits / len(recommended_items)
+class RecommendationEvaluator:
+    """precision@k, recall@k, NDCG@k, and a multi-user averaging helper."""
 
     @staticmethod
-    def precision_at_k(recommended_items, relevant_items, k):
-        """
-        Precision, but only looking at the top k recommendations.
-        Useful because most systems only show a user the top few
-        picks — precision over the whole list can be misleadingly low
-        if the good stuff is all near the top.
+    def precision_at_k(recommendations, relevant_items, k):
+        """Fraction of the top-k recommendations that are relevant."""
+        if not recommendations or k <= 0:
+            return 0.0
+        top_k = recommendations[:k]
+        relevant = set(relevant_items)
+        return sum(1 for item in top_k if item in relevant) / len(top_k)
 
-        Edge cases handled:
-        - k <= 0 -> 0.0
-        - fewer than k recommendations -> just evaluates however many
-          there are, rather than crashing
-        """
-        if k <= 0 or not recommended_items:
+    @staticmethod
+    def recall_at_k(recommendations, relevant_items, k):
+        """Fraction of all relevant items captured in the top-k."""
+        if not relevant_items or k <= 0:
+            return 0.0
+        top_k = set(recommendations[:k])
+        relevant = set(relevant_items)
+        return len(top_k & relevant) / len(relevant)
+
+    @staticmethod
+    def ndcg_at_k(recommendations, relevant_items, k):
+        """Position-aware ranking quality: relevant items ranked higher score more."""
+        if not relevant_items or k <= 0 or not recommendations:
             return 0.0
 
-        top_k = recommended_items[:k]
-        return Evaluator.precision(top_k, relevant_items)
+        relevant = set(relevant_items)
+        top_k = recommendations[:k]
 
+        dcg = sum(
+            (1.0 if item in relevant else 0.0) / math.log2(i + 2)
+            for i, item in enumerate(top_k)
+        )
+        ideal_hits = min(k, len(relevant))
+        idcg = sum(1.0 / math.log2(i + 2) for i in range(ideal_hits))
 
-# ---------------------------------------------------------------------------
-# Simple test cases you can run directly: python3 evaluator.py
-# ---------------------------------------------------------------------------
-if __name__ == "__main__":
-    evaluator = Evaluator()
+        return dcg / idcg if idcg else 0.0
 
-    recommended = ["movie1", "movie2", "movie3", "movie4"]
-    relevant = ["movie1", "movie3", "movie9"]  # movie9 was never recommended
+    def evaluate_all(self, recommendations_dict, ground_truth_dict, k=10):
+        """Average precision/recall/NDCG across users who have ground truth.
+        Users missing ground truth are skipped, not counted as zero."""
+        precisions, recalls, ndcgs = [], [], []
 
-    p = evaluator.precision(recommended, relevant)
-    print("Precision:", p)
-    assert round(p, 4) == round(2 / 4, 4)  # movie1 and movie3 are hits
+        for user_id, recs in recommendations_dict.items():
+            relevant = ground_truth_dict.get(user_id)
+            if not relevant:
+                continue
+            precisions.append(self.precision_at_k(recs, relevant, k))
+            recalls.append(self.recall_at_k(recs, relevant, k))
+            ndcgs.append(self.ndcg_at_k(recs, relevant, k))
 
-    p_at_2 = evaluator.precision_at_k(recommended, relevant, k=2)
-    print("Precision@2:", p_at_2)
-    # top 2 recommendations are movie1, movie2 -> only movie1 is relevant
-    assert round(p_at_2, 4) == 0.5
+        n = len(precisions)
+        if n == 0:
+            return {"precision_at_k": 0.0, "recall_at_k": 0.0,
+                    "ndcg_at_k": 0.0, "num_users_evaluated": 0}
 
-    # edge cases
-    assert evaluator.precision([], relevant) == 0.0
-    assert evaluator.precision(recommended, []) == 0.0
-    assert evaluator.precision_at_k(recommended, relevant, k=0) == 0.0
-
-    print("\nAll evaluator.py tests passed!")
+        return {
+            "precision_at_k": sum(precisions) / n,
+            "recall_at_k": sum(recalls) / n,
+            "ndcg_at_k": sum(ndcgs) / n,
+            "num_users_evaluated": n,
+        }
