@@ -5,33 +5,47 @@ truth (items the user actually engaged with).
 """
 
 import math
+from typing import Dict, List
+
+from .exceptions import InvalidInputError
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class RecommendationEvaluator:
     """precision@k, recall@k, NDCG@k, and a multi-user averaging helper."""
 
     @staticmethod
-    def precision_at_k(recommendations, relevant_items, k):
+    def _validate_k(k: int) -> None:
+        if not isinstance(k, int) or k <= 0:
+            raise InvalidInputError(f"k must be a positive integer, got {k!r}")
+
+    @staticmethod
+    def precision_at_k(recommendations: List[str], relevant_items: List[str], k: int) -> float:
         """Fraction of the top-k recommendations that are relevant."""
-        if not recommendations or k <= 0:
+        RecommendationEvaluator._validate_k(k)
+        if not recommendations:
             return 0.0
         top_k = recommendations[:k]
         relevant = set(relevant_items)
         return sum(1 for item in top_k if item in relevant) / len(top_k)
 
     @staticmethod
-    def recall_at_k(recommendations, relevant_items, k):
+    def recall_at_k(recommendations: List[str], relevant_items: List[str], k: int) -> float:
         """Fraction of all relevant items captured in the top-k."""
-        if not relevant_items or k <= 0:
+        RecommendationEvaluator._validate_k(k)
+        if not relevant_items:
             return 0.0
         top_k = set(recommendations[:k])
         relevant = set(relevant_items)
         return len(top_k & relevant) / len(relevant)
 
     @staticmethod
-    def ndcg_at_k(recommendations, relevant_items, k):
+    def ndcg_at_k(recommendations: List[str], relevant_items: List[str], k: int) -> float:
         """Position-aware ranking quality: relevant items ranked higher score more."""
-        if not relevant_items or k <= 0 or not recommendations:
+        RecommendationEvaluator._validate_k(k)
+        if not relevant_items or not recommendations:
             return 0.0
 
         relevant = set(relevant_items)
@@ -46,20 +60,30 @@ class RecommendationEvaluator:
 
         return dcg / idcg if idcg else 0.0
 
-    def evaluate_all(self, recommendations_dict, ground_truth_dict, k=10):
+    def evaluate_all(
+        self,
+        recommendations_dict: Dict[str, List[str]],
+        ground_truth_dict: Dict[str, List[str]],
+        k: int = 10,
+    ) -> Dict[str, float]:
         """Average precision/recall/NDCG across users who have ground truth.
-        Users missing ground truth are skipped, not counted as zero."""
+        Users missing ground truth are skipped, not counted as zero, so
+        incomplete evaluation data doesn't silently deflate the score."""
         precisions, recalls, ndcgs = [], [], []
+        skipped = 0
 
         for user_id, recs in recommendations_dict.items():
             relevant = ground_truth_dict.get(user_id)
             if not relevant:
+                skipped += 1
                 continue
             precisions.append(self.precision_at_k(recs, relevant, k))
             recalls.append(self.recall_at_k(recs, relevant, k))
             ndcgs.append(self.ndcg_at_k(recs, relevant, k))
 
         n = len(precisions)
+        if skipped:
+            logger.info("evaluate_all: skipped %d user(s) with no ground truth", skipped)
         if n == 0:
             return {"precision_at_k": 0.0, "recall_at_k": 0.0,
                     "ndcg_at_k": 0.0, "num_users_evaluated": 0}
