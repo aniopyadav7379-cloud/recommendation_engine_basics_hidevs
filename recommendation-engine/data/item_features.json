@@ -1,0 +1,9 @@
+{
+  "job_1": ["python", "backend"],
+  "job_2": ["python", "ml"],
+  "job_3": ["python", "backend", "cloud"],
+  "job_5": ["react", "frontend"],
+  "job_6": ["ml", "python"],
+  "job_9": ["design", "figma"],
+  "job_10": ["design", "ux"]
+}

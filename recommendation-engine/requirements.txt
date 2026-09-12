@@ -1,0 +1,9 @@
+fastapi>=0.141
+uvicorn[standard]>=0.29
+pydantic>=2.0
+
+# dev/test
+pytest>=8.0
+pytest-cov>=5.0
+httpx2>=2.9
+ruff>=0.6
