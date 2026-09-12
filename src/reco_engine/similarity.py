@@ -5,9 +5,11 @@ no external state, so they're trivially unit-testable and safe to call
 from concurrent contexts.
 """
 
+from __future__ import annotations
+
 import math
+from collections.abc import Iterable, Sequence
 from functools import lru_cache
-from typing import Iterable, Sequence, Tuple
 
 from .exceptions import InvalidInputError
 
@@ -32,7 +34,7 @@ class SimilarityCalculator:
         if not vec1 or not vec2:
             return 0.0
 
-        dot = sum(a * b for a, b in zip(vec1, vec2))
+        dot = sum(a * b for a, b in zip(vec1, vec2, strict=True))
         norm1 = math.sqrt(sum(a * a for a in vec1))
         norm2 = math.sqrt(sum(b * b for b in vec2))
         if norm1 == 0 or norm2 == 0:
@@ -43,7 +45,7 @@ class SimilarityCalculator:
     # ------------------------------------------------------------------
     @staticmethod
     @lru_cache(maxsize=4096)
-    def _jaccard_cached(s1: Tuple[str, ...], s2: Tuple[str, ...]) -> float:
+    def _jaccard_cached(s1: tuple[str, ...], s2: tuple[str, ...]) -> float:
         """Cached core computation; keyed on sorted tuples so set order
         never causes cache misses. Item/skill catalogs are typically
         small and re-compared often (e.g. every candidate against a
@@ -81,7 +83,7 @@ class SimilarityCalculator:
         mean1 = sum(ratings1) / n
         mean2 = sum(ratings2) / n
 
-        cov = sum((a - mean1) * (b - mean2) for a, b in zip(ratings1, ratings2))
+        cov = sum((a - mean1) * (b - mean2) for a, b in zip(ratings1, ratings2, strict=True))
         var1 = sum((a - mean1) ** 2 for a in ratings1)
         var2 = sum((b - mean2) ** 2 for b in ratings2)
 
@@ -110,10 +112,10 @@ class SimilarityCalculator:
         if not (len(ratings1) == len(ratings2) == len(item_means)) or not ratings1:
             return 0.0
 
-        centered1 = [r - m for r, m in zip(ratings1, item_means)]
-        centered2 = [r - m for r, m in zip(ratings2, item_means)]
+        centered1 = [r - m for r, m in zip(ratings1, item_means, strict=True)]
+        centered2 = [r - m for r, m in zip(ratings2, item_means, strict=True)]
 
-        dot = sum(a * b for a, b in zip(centered1, centered2))
+        dot = sum(a * b for a, b in zip(centered1, centered2, strict=True))
         norm1 = math.sqrt(sum(a * a for a in centered1))
         norm2 = math.sqrt(sum(b * b for b in centered2))
         if norm1 == 0 or norm2 == 0:

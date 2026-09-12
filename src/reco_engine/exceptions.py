@@ -5,6 +5,8 @@ everywhere) lets callers — a REST layer, a CLI, a batch job — catch
 exactly what they care about without swallowing unrelated bugs.
 """
 
+from __future__ import annotations
+
 
 class RecoEngineError(Exception):
     """Base class for all errors raised by this package."""
@@ -39,3 +41,8 @@ class ItemNotFoundError(RecoEngineError):
 
 class PersistenceError(RecoEngineError):
     """Raised when the storage backend fails to read or write data."""
+
+
+class ConfigurationError(RecoEngineError):
+    """Raised when environment-provided configuration fails validation
+    (e.g. a negative weight, an out-of-range port, all-zero weights)."""

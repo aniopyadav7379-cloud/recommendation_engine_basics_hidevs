@@ -12,10 +12,10 @@ Refactored around two design patterns:
   — `CandidateGenerator` itself never needs to change.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from collections import Counter
-from functools import lru_cache
-from typing import List
 
 from .exceptions import InvalidInputError
 from .logging_config import get_logger
@@ -31,7 +31,7 @@ class CandidateStrategy(ABC):
     name: str = "base"
 
     @abstractmethod
-    def generate(self, user_id: str, limit: int) -> List[str]:
+    def generate(self, user_id: str, limit: int) -> list[str]:
         """Return up to `limit` candidate item_ids for `user_id`."""
 
 
@@ -44,11 +44,11 @@ class PopularityStrategy(CandidateStrategy):
     def __init__(self, repo: Repository):
         self.repo = repo
 
-    def generate(self, user_id: str, limit: int) -> List[str]:
+    def generate(self, user_id: str, limit: int) -> list[str]:
         history = self.repo.get_all_user_history()
         if not history:
             return []
-        counts = Counter()
+        counts: Counter[str] = Counter()
         for items in history.values():
             counts.update(items)
         return [item_id for item_id, _ in counts.most_common(limit)]
@@ -61,12 +61,12 @@ class CollaborativeStrategy(CandidateStrategy):
 
     name = "collaborative"
 
-    def __init__(self, repo: Repository, similarity: SimilarityCalculator = None):
+    def __init__(self, repo: Repository, similarity: SimilarityCalculator | None = None):
         self.repo = repo
         self.similarity = similarity or SimilarityCalculator()
         self._fallback = PopularityStrategy(repo)
 
-    def generate(self, user_id: str, limit: int) -> List[str]:
+    def generate(self, user_id: str, limit: int) -> list[str]:
         target = self.repo.get_user_history(user_id)
         if not target:
             return self._fallback.generate(user_id, limit)
@@ -99,18 +99,18 @@ class ContentBasedStrategy(CandidateStrategy):
 
     name = "content_based"
 
-    def __init__(self, repo: Repository, similarity: SimilarityCalculator = None):
+    def __init__(self, repo: Repository, similarity: SimilarityCalculator | None = None):
         self.repo = repo
         self.similarity = similarity or SimilarityCalculator()
         self._fallback = PopularityStrategy(repo)
 
-    def generate(self, user_id: str, limit: int) -> List[str]:
+    def generate(self, user_id: str, limit: int) -> list[str]:
         target = self.repo.get_user_history(user_id)
         all_features = self.repo.get_all_item_features()
         if not target or not all_features:
             return self._fallback.generate(user_id, limit)
 
-        profile = set()
+        profile: set[str] = set()
         for item in target:
             profile |= self.repo.get_item_features(item)
         if not profile:
@@ -131,7 +131,17 @@ class CandidateGenerator:
     dominates the pool, and always excludes items the user has already
     seen (a final safety net — individual strategies should already
     exclude these, but popularity in particular is un-personalized by
-    nature, so this is enforced here too)."""
+    nature, so this is enforced here too).
+
+    Caching: `popularity_candidates` doesn't depend on `user_id` at all
+    (it's a global ranking over every user's history), so it's cached
+    after the first call and reused across every user in the process —
+    it would otherwise be recomputed via a full history scan on *every*
+    `hybrid_candidates` call, for every user, even though the answer is
+    the same until someone's history changes. `invalidate_cache` is
+    called by `RecommendationService.record_interaction` whenever that
+    happens, so the cache can never serve a stale ranking.
+    """
 
     def __init__(self, repo: Repository, max_candidates: int = 20):
         if max_candidates <= 0:
@@ -143,16 +153,25 @@ class CandidateGenerator:
         self.collaborative_strategy = CollaborativeStrategy(repo, similarity)
         self.content_strategy = ContentBasedStrategy(repo, similarity)
 
-    def collaborative_candidates(self, user_id: str) -> List[str]:
+        self._popularity_cache: list[str] | None = None
+
+    def invalidate_cache(self) -> None:
+        """Drop any cached, potentially now-stale candidate data.
+        Safe to call unconditionally after any write to the repository."""
+        self._popularity_cache = None
+
+    def collaborative_candidates(self, user_id: str) -> list[str]:
         return self.collaborative_strategy.generate(user_id, self.max_candidates)
 
-    def content_based_candidates(self, user_id: str) -> List[str]:
+    def content_based_candidates(self, user_id: str) -> list[str]:
         return self.content_strategy.generate(user_id, self.max_candidates)
 
-    def popularity_candidates(self) -> List[str]:
-        return self.popularity_strategy.generate("", self.max_candidates)
+    def popularity_candidates(self) -> list[str]:
+        if self._popularity_cache is None:
+            self._popularity_cache = self.popularity_strategy.generate("", self.max_candidates)
+        return self._popularity_cache
 
-    def hybrid_candidates(self, user_id: str) -> List[str]:
+    def hybrid_candidates(self, user_id: str) -> list[str]:
         target = self.repo.get_user_history(user_id)
         strategies = [
             self.collaborative_candidates(user_id),

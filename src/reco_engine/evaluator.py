@@ -4,8 +4,9 @@ Offline metrics for measuring recommendation quality against ground
 truth (items the user actually engaged with).
 """
 
+from __future__ import annotations
+
 import math
-from typing import Dict, List
 
 from .exceptions import InvalidInputError
 from .logging_config import get_logger
@@ -22,7 +23,7 @@ class RecommendationEvaluator:
             raise InvalidInputError(f"k must be a positive integer, got {k!r}")
 
     @staticmethod
-    def precision_at_k(recommendations: List[str], relevant_items: List[str], k: int) -> float:
+    def precision_at_k(recommendations: list[str], relevant_items: list[str], k: int) -> float:
         """Fraction of the top-k recommendations that are relevant."""
         RecommendationEvaluator._validate_k(k)
         if not recommendations:
@@ -32,7 +33,7 @@ class RecommendationEvaluator:
         return sum(1 for item in top_k if item in relevant) / len(top_k)
 
     @staticmethod
-    def recall_at_k(recommendations: List[str], relevant_items: List[str], k: int) -> float:
+    def recall_at_k(recommendations: list[str], relevant_items: list[str], k: int) -> float:
         """Fraction of all relevant items captured in the top-k."""
         RecommendationEvaluator._validate_k(k)
         if not relevant_items:
@@ -42,7 +43,7 @@ class RecommendationEvaluator:
         return len(top_k & relevant) / len(relevant)
 
     @staticmethod
-    def ndcg_at_k(recommendations: List[str], relevant_items: List[str], k: int) -> float:
+    def ndcg_at_k(recommendations: list[str], relevant_items: list[str], k: int) -> float:
         """Position-aware ranking quality: relevant items ranked higher score more."""
         RecommendationEvaluator._validate_k(k)
         if not relevant_items or not recommendations:
@@ -62,10 +63,10 @@ class RecommendationEvaluator:
 
     def evaluate_all(
         self,
-        recommendations_dict: Dict[str, List[str]],
-        ground_truth_dict: Dict[str, List[str]],
+        recommendations_dict: dict[str, list[str]],
+        ground_truth_dict: dict[str, list[str]],
         k: int = 10,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """Average precision/recall/NDCG across users who have ground truth.
         Users missing ground truth are skipped, not counted as zero, so
         incomplete evaluation data doesn't silently deflate the score."""

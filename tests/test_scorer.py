@@ -62,3 +62,38 @@ class TestRecommendationScorer:
     def test_rank_candidates_invalid_limit_raises(self, scorer_with_signals):
         with pytest.raises(InvalidInputError):
             scorer_with_signals.rank_candidates("u1", ["item_a"], limit=0)
+
+
+class TestExplanations:
+    """Explanations must be built only from real, contributing signals —
+    never a generic template and never a signal that didn't actually
+    move the score."""
+
+    def test_explanation_names_the_contributing_signal(self, scorer_with_signals):
+        score, explanation = scorer_with_signals.calculate_score("u1", "item_a")
+        assert "relevance" in explanation
+        assert score > 0
+
+    def test_explanation_omits_negligible_signals(self):
+        scorer = RecommendationScorer()
+        scorer.add_scorer("relevance", lambda u, i, ctx: 0.9, weight=0.99)
+        scorer.add_scorer("recency", lambda u, i, ctx: 0.01, weight=0.01)
+        _, explanation = scorer.calculate_score("u1", "item_a")
+        assert "relevance" in explanation
+        assert "recency" not in explanation
+
+    def test_no_signals_gives_honest_fallback_explanation(self):
+        scorer = RecommendationScorer()
+        scorer.add_scorer("relevance", lambda u, i, ctx: 0.0, weight=1.0)
+        _, explanation = scorer.calculate_score("u1", "item_a")
+        assert "No strong personalization signal" in explanation
+
+    def test_no_scorers_registered_gives_honest_explanation(self):
+        scorer = RecommendationScorer()
+        _, explanation = scorer.calculate_score("u1", "item_a")
+        assert explanation == "No applicable scoring signals"
+
+    def test_multiple_meaningful_signals_are_all_named(self, scorer_with_signals):
+        _, explanation = scorer_with_signals.calculate_score("u1", "item_b")
+        assert "relevance" in explanation
+        assert "popularity" in explanation

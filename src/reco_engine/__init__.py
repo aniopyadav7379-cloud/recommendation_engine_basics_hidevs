@@ -5,12 +5,14 @@ Public surface:
     RecommendationEvaluator, RecommendationService, get_settings
 """
 
-from .similarity import SimilarityCalculator
+from __future__ import annotations
+
 from .candidate_gen import CandidateGenerator
-from .scorer import RecommendationScorer, ScoredItem
-from .evaluator import RecommendationEvaluator
-from .service import RecommendationService
 from .config import get_settings
+from .evaluator import RecommendationEvaluator
+from .scorer import RecommendationScorer, ScoredItem
+from .service import RecommendationService
+from .similarity import SimilarityCalculator
 
 __all__ = [
     "SimilarityCalculator",
@@ -22,4 +24,4 @@ __all__ = [
     "get_settings",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

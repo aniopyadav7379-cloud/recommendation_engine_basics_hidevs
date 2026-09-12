@@ -5,6 +5,8 @@ Usage:
     python -m reco_engine.cli record <user_id> <item_id>
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
 
@@ -22,7 +24,7 @@ def build_service() -> RecommendationService:
     return RecommendationService(repo)
 
 
-def main(argv=None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="reco_engine", description="Recommendation engine CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 

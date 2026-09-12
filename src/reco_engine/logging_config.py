@@ -5,6 +5,8 @@ destination are controllable in one place and callers can redirect
 output (file, log aggregator, stdout) without touching library code.
 """
 
+from __future__ import annotations
+
 import logging
 
 from .config import get_settings
