@@ -1,6 +1,0 @@
-{
-  "alice": ["job_1", "job_2", "job_5"],
-  "bob": ["job_1", "job_2", "job_3"],
-  "carol": ["job_9", "job_10"],
-  "dave": ["job_1", "job_6"]
-}
